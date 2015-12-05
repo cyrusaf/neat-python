@@ -1,4 +1,5 @@
 from math import exp
+from copy import deepcopy
 
 class Node:
 	def __init__(self):
@@ -8,9 +9,12 @@ class Node:
 		self.type   = None # 0 = input, 1 = output, 2 = hidden
 
 	def evaluate(self):
+		#print "Evaluating node #%s!" % self.innovation
 		if len(self.inputs) == 0 and self.type != 0:
 			self.value = 0
-		if self.value is not None: return self.value
+		if self.value is not None:
+			#print "Already know the value of node #%s as %s" % (self.innovation, self.value)
+			return self.value
 
 		# Loop through connections and call evaluate on them
 		self.value = 0
@@ -18,6 +22,7 @@ class Node:
 			node = inp['node']
 			self.value += node.evaluate()*inp['weight']
 		self.value = self.activationFunc(self.value)
+		#print "Evaluated node #%s to %s" % (self.innovation, self.value)
 		return self.value
 
 	def activationFunc(self, x):
@@ -48,12 +53,15 @@ class Network:
 		input_nodes = self.getInputNodes()
 		output_nodes = self.getOutputNodes()
 
+		network = deepcopy(self)
+
 		if len(input_nodes) != len(inputs): raise Exception("Number of inputs must match number of input nodes!")
 
 		for i, node_id in enumerate(input_nodes):
-			self.nodes[node_id].value = inputs[i]
+			network.nodes[node_id].value = inputs[i]
 
 		for node_id in output_nodes:
-			self.nodes[node_id].evaluate()
+			network.nodes[node_id].evaluate()
 
-		return [self.nodes[node_id].value for node_id in output_nodes]
+		output = [network.nodes[node_id].value for node_id in output_nodes]
+		return output

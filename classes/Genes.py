@@ -8,6 +8,7 @@ class NodeGene(Gene):
 	def __init__(self):
 		Gene.__init__(self)
 		self.level = None
+		self.value = None
 
 class ConnectionGene(Gene):
 	def __init__(self):

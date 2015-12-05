@@ -1,8 +1,8 @@
 from copy import deepcopy
 from random import randint, choice, getrandbits, sample, random
-from math import fabs
+from math import fabs, floor, ceil
 from pprint import pprint
-
+from time import sleep
 from Genes import ConnectionGene, NodeGene
 
 from Neural import Network, Node
@@ -13,7 +13,7 @@ class Organism:
 		self.connection_genes = {}
 		self.levels  = levels
 		self.fitness = None
-		self.species = None
+		self.species = False
 
 	def __str__(self):
 		nodes = [str(node.innovation) + ": %s" % node.level for node in self.node_genes.values()]
@@ -35,7 +35,7 @@ class Organism:
 		c1 = 1.0
 		c3 = 0.4
 		N  = float(max([self.totalGenes(), org2.totalGenes()]))
-		if N < 20: N = 1.0
+		if N < 35: N = 1.0
 
 		shared_connections = set(self.connection_genes.keys()).intersection(set(org2.connection_genes.keys()))
 		W = 0.0
@@ -105,8 +105,7 @@ class Organism:
 					connection.disabled = False
 
 			child.addConnection(connection)
-
-		return child
+		return deepcopy(child)
 
 	def createNetwork(self):
 		network = Network(self.levels)
@@ -114,6 +113,8 @@ class Organism:
 		for node_gene in self.node_genes.values():
 			node = Node()
 			node.innovation = node_gene.innovation
+			if node_gene.value is not None:
+				node.value = node_gene.value
 			# Assign node type
 			if node_gene.level == 1:
 				node.type = 0
@@ -134,85 +135,95 @@ class Organism:
 		return network
 
 	def mutate(self):
-		self.__mutateAddConnection()
-		self.__mutateAddNode()
-		self.__mutateDisableConnection()
-		self.__mutateConnectionWeight()
+		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+			self.__mutateAddConnection()
+
+		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+			self.__mutateAddNode()
+
+		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+			self.__mutateDisableConnection()
+
+		if randint(0,100)+1 > 0.8*100.0:
+			self.__mutateConnectionWeight()
 
 	def __mutateAddConnection(self):
-		for i in self.node_genes:
-			for j in self.node_genes:
-				if i == j: continue
+		if len(self.node_genes) < 2: raise Exception("Cannot mutateAddConnection if there are less than 2 node_genes")
 
-				# Find node in higher level
-				into = None
-				out = None
-				if self.node_genes[i].level < self.node_genes[j].level:
-					out = self.node_genes[i]
-					into = self.node_genes[j]
-				else:
-					continue
-				
-				# Check if connection between into and out already exists
-				flag = False
-				for connection in self.connection_genes.values():
-					if connection.into == into.innovation and connection.out == out.innovation:
-						flag = True
-						break
+		out  = choice(self.node_genes.values())
+		into = choice(self.node_genes.values())
 
-				if flag: continue
-				if randint(0,100)+1 > Organism.mutate_rate*100.0: continue
+		while out == into:
+			out = choice(self.node_genes.values())
+			into = choice(self.node_genes.values())
 
-				connection = ConnectionGene()
-				connection.into   = into.innovation
-				connection.out    = out.innovation
-				connection.weight = float(randint(-100,100))/10.0
-				#print "New connection between %s and %s with weight %s" % (connection.out, connection.into, connection.weight) 
-				self.addConnection(connection)
+		# Find node in higher level
+		if out.level < into.level:
+			temp = out
+			into = out
+			out = into
+		
+		# Check if connection between into and out already exists
+		flag = False
+		for connection in self.connection_genes.values():
+			if connection.into == into.innovation and connection.out == out.innovation:
+				flag = True
+				break
+
+		if flag:
+			self.__mutateAddConnection()
+			return
+
+		connection = ConnectionGene()
+		connection.into   = into.innovation
+		connection.out    = out.innovation
+		connection.weight = float(randint(-40,40))/10.0
+		#print "New connection between %s and %s with weight %s" % (connection.out, connection.into, connection.weight) 
+		self.addConnection(connection)
 
 	def __mutateAddNode(self):
 		# Loop through connections
-		for connection_gene in self.connection_genes.values():
-			into = self.node_genes[connection_gene.into]
-			out  = self.node_genes[connection_gene.out]
+		connection_gene = choice(self.connection_genes.values())
+		into = self.node_genes[connection_gene.into]
+		out  = self.node_genes[connection_gene.out]
 
-			# If difference in node levels is greater than 1, add node with chance in random level between
-			diff = into.level - out.level
-			if diff > 1:
-				if randint(0,100)+1 > Organism.mutate_rate*100.0: continue
-				#print "New node between %s and %s" % (connection_gene.out, connection_gene.into)
-				# Disable connection gene
-				connection_gene.disabled = True
-				# Create new node in random level between
-				new_node       = NodeGene()
-				new_node.level = randint(out.level+1, into.level-1)
-				self.addNode(new_node)
+		# If difference in node levels is greater than 1, add node with chance in random level between
+		diff = into.level - out.level
+		if diff > 1:
+			#print "New node between %s and %s" % (connection_gene.out, connection_gene.into)
+			# Disable connection gene
+			connection_gene.disabled = True
+			# Create new node in random level between
+			new_node       = NodeGene()
+			new_node.level = randint(out.level+1, into.level-1)
+			self.addNode(new_node)
 
-				# Create two new connection genes connecting new node
-				new_conn1        = ConnectionGene()
-				new_conn1.into   = into.innovation
-				new_conn1.out    = new_node.innovation
-				new_conn1.weight = 1.0
-				new_conn2        = ConnectionGene()
-				new_conn2.into   = new_node.innovation
-				new_conn2.out    = out.innovation
-				new_conn2.weight = connection_gene.weight
-				self.addConnection(new_conn1)
-				self.addConnection(new_conn2)
+			# Create two new connection genes connecting new node
+			new_conn1        = ConnectionGene()
+			new_conn1.into   = into.innovation
+			new_conn1.out    = new_node.innovation
+			new_conn1.weight = 1.0
+			new_conn2        = ConnectionGene()
+			new_conn2.into   = new_node.innovation
+			new_conn2.out    = out.innovation
+			new_conn2.weight = connection_gene.weight
+			self.addConnection(new_conn1)
+			self.addConnection(new_conn2)
+		else:
+			self.__mutateAddNode()
 	
 	def __mutateDisableConnection(self):
 		# Loop through all connections and chance disable
-		for connection in self.connection_genes.values():
-			if randint(0,100)+1 > Organism.mutate_rate*100.0: continue
-			connection.disabled = True
+		connection = choice(self.connection_genes.values())
+		connection.disabled = True
 
 	def __mutateConnectionWeight(self):
 		# Loop through all connections and chance change weight
-		for connection in self.connection_genes.values():
-			if randint(0,100)+1 > 0.8*100.0: continue
-			connection.weight = float(randint(-10,10))/10.0
+		connection = choice(self.connection_genes.values())
+		connection.weight = float(randint(-10,10))/10.0
 
 class Species:
+	crossover_chance = 0.75
 	def __init__(self):
 		self.members     = []
 		self.max_fitness = 0
@@ -221,17 +232,21 @@ class Species:
 
 	def addOrganism(self, organism):
 		self.members.append(organism)
+		organism.species = True
 
 	def cullOne(self):
-		pass
+		top = self.members[0]
+		top.fitness = None
+		self.members = [top]
 
 	def cullHalf(self):
+		if len(self.members)/2 < 1: return
 		self.members = self.members[:len(self.members)/2]
 
 	def rankMembers(self):
 		self.members.sort(key=lambda x: x.fitness*-1)
 		self.max_fitness = self.members[0].fitness
-		self.avg_fitness = reduce(lambda x, y: x + y, self.members) / len(self.members)
+		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.members, 0.0) / len(self.members)
 
 	def organismBelongs(self, organism):
 		if len(self.members) == 0: raise Exception("Cannot check if organism belongs to empty species!")
@@ -241,7 +256,25 @@ class Species:
 		return False
 
 	def breedChild(self):
-		
+		child = None
+		if random() < Species.crossover_chance and len(self.members) > 1:
+			if len(self.members) < 2: raise Exception("Not enough members of species to breed!")
+			# Pick random parents from species
+			temp_members = deepcopy(self.members)
+			parent1 = choice(temp_members)
+			temp_members.remove(parent1)
+			parent2 = choice(temp_members)
+			child = parent1.mateWith(parent2)
+			child.mutate()
+		else:
+			# Pick random parent from species
+			parent = choice(self.members)
+			child = Organism(parent.levels)
+			child.node_genes = deepcopy(parent.node_genes)
+			child.connection_genes = deepcopy(parent.connection_genes)
+			child.mutate()
+
+		return child
 
 class Neat:
 	def __init__(self, n_inputs, n_outputs):
@@ -253,10 +286,12 @@ class Neat:
 		self.max_fitness = 0
 
 		self.options              = {}
-		self.options['pop_size']  = 150
-		self.options['n_survive'] = 10
+		self.options['pop_size']  = 50
+		self.options['n_survive'] = 5
 		self.options['levels']    = 10
-		Organism.mutate_rate      = 0.1
+
+		Species.crossover_chance  = 0.75
+		Organism.mutate_rate      = 0.01
 
 		# Create initial population
 		base = Organism(self.options['levels'])
@@ -266,6 +301,11 @@ class Neat:
 			node = NodeGene()
 			node.level = 1
 			base.addNode(node)
+
+		# Create bias node
+		node = NodeGene()
+		node.level = 1
+		node.value = 1.0
 
 		# Create output NodeGenes
 		for i in range(0, n_outputs):
@@ -296,14 +336,15 @@ class Neat:
 		# Loop through all species and compare
 		for species in self.species:
 			# Continue if organism already belongs to a species
-			organism.species is not None: continue
+			if organism.species: continue
 			if species.organismBelongs(organism):
 				species.addOrganism(organism)
 
 		# If organism does not belong to a species, create new
-		if organism.species is None:
+		if organism.species == False:
 			species = Species()
 			species.addOrganism(organism)
+			self.addSpecies(species)
 
 	def removeStaleSpecies(self):
 		survived = []
@@ -325,72 +366,83 @@ class Neat:
 			survived.append(species)
 
 		# Replaced species with survived
-		self.species = survived
+		if len(survived) > 1: self.species = survived
 
 	def removeWeakSpecies(self):
 		survived = []
 		for species in self.species:
 			if species.avg_fitness < self.avg_fitness: continue
 			survived.append(species)
-		self.species = survived
+		if len(survived) > 1: self.species = survived
+
+	def getPopulation(self):
+		population = []
+		for species in self.species:
+			for member in species.members:
+				population.append(member)
+		return population
 
 	def rankGlobally(self):
 		# Sum members of species
-		population = reduce(lambda x, y: x.members + y.members, species)
+		population = self.getPopulation()
 		# Get avg_fitness
-		self.avg_fitness = reduce(lambda x, y: x + y, population) / len(population)
+		if len(population) == 0:
+			self.avg_fitness = 0
+			self.max_fitness = 0
+			return
+		self.avg_fitness = reduce(lambda x, y: x + y.fitness, population, 0.0) / len(population)
 		# Rank members
-		population.sort(lambda x: -1*x.fitness)
+		population.sort(key = lambda x: -1*x.fitness)
+		self.global_rank = population
 		# Get max fitness
-		self.max_fitness = population[0]
+		self.max_fitness = population[0].fitness
 
 	def epoch(self):
-
-		# Sum fitness for average and check that fitness values have been assigned
-		sum_fitness = 0
+		print "species: %s" % len(self.species)
+		# Check that fitness values have been assigned
 		for species in self.species:
-			for organism is species.members:
+			for organism in species.members:
 				if organism.fitness is None: raise Exception("Cannot epoch when some fitness values have not been assigned!")
-				sum_fitness += organism.fitness
 				# Update max fitness
 				if organism.fitness > self.max_fitness: self.max_fitness = organism.fitness
 			species.cullHalf()
-			species.removeStaleSpecies()
-			species.rankGlobally()
-			species.removeWeakSpecies()
-			species.rankGlobally()
+
+		if len(self.species) > 1:
+			self.removeStaleSpecies()
+			self.rankGlobally()
+			self.removeWeakSpecies()
+		self.rankGlobally()
+
+		children = []
+		passed = filter(lambda x: x, [len(species.members) > 0 for species in self.species])
+		if len(passed) > self.options['pop_size']*0.1:
+			self.species.sort(key=lambda x: x.max_fitness)
+			self.species = self.species[:int(self.options['pop_size']*0.1)]
+		print "passed: %s" % len(passed)
+		# Generate children from species
+		for species in self.species:
+			#print "Species avg_fitness: %s, Population avg_fitness: %s" % (species.avg_fitness, self.avg_fitness)
+			breed = int(ceil(species.max_fitness / self.avg_fitness))
+			for i in range(0, breed):
+				children.append(species.breedChild())
+				if len(children) + len(passed) >= self.options['pop_size']: break
+			if len(children) + len(passed) >= self.options['pop_size']: break
 
 
+		while len(children) + len(passed) < self.options['pop_size']:
+			if len(self.species) == 0: raise Exception("Species are empty!")
+			species = choice(self.species)
+			children.append(species.breedChild())
 
-		# Get top n organisms then recombine and mutate to create new population
-		self.population.sort(key=lambda x: -1*x.fitness/self.numInSpecies(x)) #(x.fitness*-1, 1/(len(x.connection_genes) + len(x.node_genes)))
-		print [organism.fitness/self.numInSpecies(organism) for organism in self.population]
-		print "Total Species: %s" % len(self.species)
-		top = self.population[:self.options['n_survive']]
+		
+
+		for species in self.species:
+			species.cullOne()
+
+		for child in children:
+			self.addOrganism(child)
 
 		history = {}
-		history['max_fitness'] = top[0].fitness
-		history['avg_fitness'] = sum_fitness/len(self.population)
-		history['best_performers'] = top
+		history['max_fitness'] = self.max_fitness
+		history['avg_fitness'] = self.avg_fitness
 		self.history.append(history)
-
-		# Reset population
-		self.population = deepcopy(top)
-		for organism in self.population:
-			organism.fitness = None
-		
-		# For pop_size - n_survive times, mate two random top and then mutate child
-		for i in range(0, self.options['pop_size']-self.options['n_survive']):
-			# Select two random organisms from top
-			temp_top = deepcopy(top)
-			org1 = choice(temp_top)
-			temp_top.remove(org1)
-			org2 = choice(temp_top)
-			if org1 == org2: raise Exception("Attempting to mate an organism with itself!")
-
-			# Mate two organisms
-			child = org1.mateWith(org2)
-			child.mutate()
-			self.population.append(child)
-
-		self.determineSpecies()
