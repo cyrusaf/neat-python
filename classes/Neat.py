@@ -1,5 +1,5 @@
 from copy import deepcopy
-from random import randint
+from random import randint, choice, getrandbits
 from pprint import pprint
 import pygame
 
@@ -10,15 +10,76 @@ class Organism:
 	mutate_rate = 0.05
 	def __init__(self):
 		self.node_genes       = {}
-		self.connection_genes = []
+		self.connection_genes = {}
 
 		self.fitness = None
 
+	def __str__(self):
+		nodes = [str(node.innovation) for node in self.node_genes.values()]
+		nodes = ", ".join(nodes)
+		connections = ["%s: %s to %s, %s" % (connection.innovation, connection.into, connection.out, connection.disabled) for connection in self.connection_genes.values()]
+		connections = "\n".join(connections)
+		return "Nodes:\n" + nodes + "\nConnections:\n" + connections
+
 	def addNode(self, node):
-		self.node_genes[node.innovation] = node
+		self.node_genes[node.innovation] = deepcopy(node)
 
 	def addConnection(self, connection):
-		self.connection_genes.append(connection)
+		self.connection_genes[connection.innovation] = deepcopy(connection)
+
+	def mateWith(self, mate):
+		fit_parent   = None
+		unfit_parent = None
+		if self.fitness > mate.fitness:
+			fit_parent   = self
+			unfit_parent = mate
+		else:
+			fit_parent   = mate
+			unfit_parent = self
+
+		fit_nodes   = fit_parent.node_genes.keys()
+		unfit_nodes = unfit_parent.node_genes.keys()
+		fit_connections   = fit_parent.connection_genes.keys()
+		unfit_connections = unfit_parent.connection_genes.keys()
+
+		disjoint_nodes       = set(fit_nodes) - set(unfit_nodes)
+		disjoint_connections = set(fit_connections) - set(unfit_connections)
+
+		common_nodes       = set(fit_nodes).intersection(unfit_nodes)
+		common_connections = set(fit_connections).intersection(unfit_connections)
+
+		# Create child
+		child = Organism()
+
+		# Loop through disjoint_nodes and add to child from fit parent
+		for node_id in disjoint_nodes:
+			child.addNode(fit_parent.node_genes[node_id])
+		# Loop through disjoint_connections and add to child from fit parent
+		for connection_id in disjoint_connections:
+			child.addConnection(fit_parent.connection_genes[connection_id])
+
+		# Randomly inherit common nodes
+		for node_id in common_nodes:
+			if bool(getrandbits(1)):
+				child.addNode(fit_parent.node_genes[node_id])
+			else:
+				child.addNode(unfit_parent.node_genes[node_id])
+
+		# Randomly inherit common connections
+		for connection_id in common_connections:
+			connection = None
+			if bool(getrandbits(1)):
+				connection = fit_parent.connection_genes[connection_id]
+			else:
+				connection = unfit_parent.connection_genes[connection_id]
+
+			if connection.disabled:
+				if randint(0,3) == 3:
+					connection.disabled = False
+
+			child.addConnection(connection)
+
+		return child
 
 	def mutate(self):
 		self.__mutateAddConnection()
@@ -26,8 +87,9 @@ class Organism:
 		# Add __mutateDisableConnection?
 
 	def __mutateAddConnection(self):
-		for i in range(1,len(self.node_genes)):
-			for j in range(i+1,len(self.node_genes)):
+		for i in self.node_genes:
+			for j in self.node_genes:
+				if i == j: continue
 
 				# Find node in higher level
 				into = None
@@ -35,15 +97,12 @@ class Organism:
 				if self.node_genes[i].level < self.node_genes[j].level:
 					into = self.node_genes[i]
 					out = self.node_genes[j]
-				elif self.node_genes[i].level == self.node_genes[j].level:
-					continue
 				else:
-					into = self.node_genes[j]
-					out = self.node_genes[i]
+					continue
 				
 				# Check if connection between into and out already exists
 				flag = False
-				for connection in self.connection_genes:
+				for connection in self.connection_genes.values():
 					if connection.into == into.innovation and connection.out == out.innovation:
 						flag = True
 						break
@@ -56,11 +115,11 @@ class Organism:
 				connection.out    = out.innovation
 				connection.weight = float(randint(-10,10))/10.0
 				print "New connection between %s and %s with weight %s" % (connection.into, connection.out, connection.weight) 
-				self.connection_genes.append(connection)
+				self.addConnection(connection)
 
 	def __mutateAddNode(self):
 		# Loop through connections
-		for connection_gene in self.connection_genes:
+		for connection_gene in self.connection_genes.values():
 			into = self.node_genes[connection_gene.into]
 			out  = self.node_genes[connection_gene.out]
 
@@ -85,8 +144,8 @@ class Organism:
 				new_conn2.into   = new_node.innovation
 				new_conn2.out    = out.innovation
 				new_conn2.weight = connection_gene.weight
-				self.connection_genes.append(new_conn1)
-				self.connection_genes.append(new_conn2)
+				self.addConnection(new_conn1)
+				self.addConnection(new_conn2)
 	
 	def __mutateDisableConnection(self):
 		# If last connection into node is disabled, removed node.
@@ -130,8 +189,8 @@ class Neat:
 	def epoch(self):
 		sum_fitness = 0
 		for organism in self.population:
-			sum_fitness += organism.fitness
 			if organism.fitness is None: raise Exception("Cannot epoch when some fitness values have not been assigned!")
+			sum_fitness += organism.fitness
 
 		# Get top n organisms then recombine and mutate to create new population
 		self.population.sort(key=lambda x: x.fitness*-1)
@@ -143,8 +202,20 @@ class Neat:
 		self.history.append(history)
 
 		# Reset population
-		self.population = top
-
-		# For pop_size - n_survive times, mate two random top and then mutate child
-		# TODO
+		self.population = deepcopy(top)
+		for organism in self.population:
+			organism.fitness = None
 		
+		# For pop_size - n_survive times, mate two random top and then mutate child
+		for i in range(0, self.options['pop_size']-self.options['n_survive']):
+			# Select two random organisms from top
+			temp_top = deepcopy(top)
+			org1 = choice(temp_top)
+			temp_top.remove(org1)
+			org2 = choice(temp_top)
+			if org1 == org2: raise Exception("Attempting to mate an organism with itself!")
+
+			# Mate two organisms
+			child = org1.mateWith(org2)
+			child.mutate()
+			self.population.append(child)
