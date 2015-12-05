@@ -1,5 +1,59 @@
+from math import exp
+
 class Node:
-	pass
+	def __init__(self):
+		self.innovation = None
+		self.value  = None
+		self.inputs = []
+		self.type   = None # 0 = input, 1 = output, 2 = hidden
+
+	def evaluate(self):
+		if len(self.inputs) == 0 and self.type != 0:
+			self.value = 0
+		if self.value is not None: return self.value
+
+		# Loop through connections and call evaluate on them
+		self.value = 0
+		for inp in self.inputs:
+			node = inp['node']
+			self.value += node.evaluate()*inp['weight']
+		self.value = self.activationFunc(self.value)
+		return self.value
+
+	def activationFunc(self, x):
+		return 1.0 / (1.0 + exp(-4.9 * x)) # sigmoid
 
 class Network:
-	pass
+	def __init__(self, levels):
+		self.nodes  = {}
+		self.levels = levels
+
+	def getInputNodes(self):
+		inputs = []
+		for node in self.nodes.iteritems():
+			if node[1].type == 0: inputs.append(node[0])
+
+		inputs.sort(key=lambda x: self.nodes[x].innovation)
+		return inputs
+
+	def getOutputNodes(self):
+		outputs = []
+		for node in self.nodes.iteritems():
+			if node[1].type == 1: outputs.append(node[0])
+
+		outputs.sort(key=lambda x: self.nodes[x].innovation)
+		return outputs
+
+	def evaluate(self, inputs):
+		input_nodes = self.getInputNodes()
+		output_nodes = self.getOutputNodes()
+
+		if len(input_nodes) != len(inputs): raise Exception("Number of inputs must match number of input nodes!")
+
+		for i, node_id in enumerate(input_nodes):
+			self.nodes[node_id].value = inputs[i]
+
+		for node_id in output_nodes:
+			self.nodes[node_id].evaluate()
+
+		return [self.nodes[node_id].value for node_id in output_nodes]
