@@ -13,6 +13,7 @@ class Organism:
 		self.connection_genes = {}
 		self.levels  = levels
 		self.fitness = None
+		self.fitness_adj = None
 		self.species = False
 
 	def __str__(self):
@@ -35,7 +36,7 @@ class Organism:
 		c1 = 1.0
 		c3 = 0.4
 		N  = float(max([self.totalGenes(), org2.totalGenes()]))
-		if N < 35: N = 1.0
+		if N < 100: N = 1.0
 
 		shared_connections = set(self.connection_genes.keys()).intersection(set(org2.connection_genes.keys()))
 		W = 0.0
@@ -135,16 +136,16 @@ class Organism:
 		return network
 
 	def mutate(self):
-		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+		if randint(0,100)+1 < Organism.mutate_rate*100.0:
 			self.__mutateAddConnection()
 
-		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+		if randint(0,100)+1 < Organism.mutate_rate*100.0:
 			self.__mutateAddNode()
 
-		if randint(0,100)+1 > Organism.mutate_rate*100.0:
+		if randint(0,100)+1 < Organism.mutate_rate*100.0:
 			self.__mutateDisableConnection()
 
-		if randint(0,100)+1 > 0.8*100.0:
+		if randint(0,100)+1 < 0.8*100.0:
 			self.__mutateConnectionWeight()
 
 	def __mutateAddConnection(self):
@@ -230,6 +231,15 @@ class Species:
 		self.avg_fitness = 0
 		self.stalesness  = 0
 
+	def getTopFitness(self):
+		self.members.sort(key=lambda x: x.fitness*-1)
+		return self.members[0].fitness
+
+	def assignAdjFitness(self):
+		for member in self.members:
+			if member.fitness is None: raise Exception("Cannot assign adjusted fitness if fitness is not set!")
+			member.fitness_adj = member.fitness/len(self.members)
+
 	def addOrganism(self, organism):
 		self.members.append(organism)
 		organism.species = True
@@ -284,6 +294,7 @@ class Neat:
 		self.global_rank = []
 
 		self.max_fitness = 0
+		self.avg_fitness = 0
 
 		self.options              = {}
 		self.options['pop_size']  = 50
@@ -291,7 +302,7 @@ class Neat:
 		self.options['levels']    = 10
 
 		Species.crossover_chance  = 0.75
-		Organism.mutate_rate      = 0.01
+		Organism.mutate_rate      = 0.15
 
 		# Create initial population
 		base = Organism(self.options['levels'])
@@ -392,13 +403,73 @@ class Neat:
 			return
 		self.avg_fitness = reduce(lambda x, y: x + y.fitness, population, 0.0) / len(population)
 		# Rank members
-		population.sort(key = lambda x: -1*x.fitness)
+		population.sort(key = lambda x: -1*x.fitness_adj)
 		self.global_rank = population
 		# Get max fitness
 		self.max_fitness = population[0].fitness
 
 	def epoch(self):
-		print "species: %s" % len(self.species)
+		
+
+		for species in self.species:
+			for organism in species.members:
+				if organism.fitness is None: raise Exception("Cannot epoch when some fitness values have not been assigned!")
+				# Update max fitness
+				if organism.fitness > self.max_fitness: self.max_fitness = organism.fitness
+
+			species.assignAdjFitness()
+
+
+
+		self.species.sort(key=lambda x: x.getTopFitness()*-1)
+		passed = [species for species in self.species[:self.options['n_survive']]]
+
+		self.rankGlobally()
+		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.global_rank, 0.0)/len(self.global_rank)
+		self.max_fitness = passed[0].members[0].fitness
+
+		print "===== Summary of Generation #%s =====" % self.generation
+		print "Number of Species: %s" % len(self.species)
+		print "Max Fitness: %s" % self.max_fitness
+		print "Avg Fitness: %s" % self.avg_fitness
+		print "Passing following organisms:"
+		print [species.members[0].fitness for species in passed]
+		print "======================================"
+
+
+		
+
+		for species in passed:
+			species.cullOne()
+
+		children = []
+		while len(passed) + len(children) < self.options['pop_size']:
+			# Same species breed or interspecies breed?
+			child = None
+			if random() < 0.1:
+				temp_passed = deepcopy([species.members[0] for species in passed])
+				parent1 = choice(temp_passed)
+				temp_passed.remove(parent1)
+				parent2 = choice(temp_passed)
+				child = parent1.mateWith(parent2)
+				child.mutate()
+			else:
+				species = choice(passed)
+				child = species.breedChild()
+			children.append(child)
+
+		
+
+		self.species = deepcopy(passed)
+		for organism in children:
+			self.addOrganism(organism)
+
+		history = {}
+		history['max_fitness'] = self.max_fitness
+		history['avg_fitness'] = self.avg_fitness
+		self.history.append(history)
+
+	def epochOld(self):
 		# Check that fitness values have been assigned
 		for species in self.species:
 			for organism in species.members:
@@ -422,14 +493,15 @@ class Neat:
 		# Generate children from species
 		for species in self.species:
 			#print "Species avg_fitness: %s, Population avg_fitness: %s" % (species.avg_fitness, self.avg_fitness)
-			breed = int(ceil(species.max_fitness / self.avg_fitness))
+			if self.avg_fitness == 0: self.avg_fitness = 0.0001
+			breed = int(ceil(species.max_fitness / self.avg_fitness))**2
 			for i in range(0, breed):
 				children.append(species.breedChild())
 				if len(children) + len(passed) >= self.options['pop_size']: break
 			if len(children) + len(passed) >= self.options['pop_size']: break
 
 
-		while len(children) + len(passed) < self.options['pop_size']:
+		while len(children) + len(self.species) < self.options['pop_size']:
 			if len(self.species) == 0: raise Exception("Species are empty!")
 			species = choice(self.species)
 			children.append(species.breedChild())
@@ -446,3 +518,5 @@ class Neat:
 		history['max_fitness'] = self.max_fitness
 		history['avg_fitness'] = self.avg_fitness
 		self.history.append(history)
+
+		

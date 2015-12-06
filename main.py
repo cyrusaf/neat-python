@@ -4,7 +4,7 @@ from time import sleep
 
 neat = Neat(2, 1)
 
-for i in range(0, 100):
+for i in range(0, 200):
 	print i
 
 	for organism in neat.getPopulation():
