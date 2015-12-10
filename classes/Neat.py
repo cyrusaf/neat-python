@@ -1,20 +1,28 @@
 from copy import deepcopy
 from random import randint, choice, getrandbits, sample, random
-from math import fabs, floor, ceil
+from math import fabs, floor, ceil, log
 from pprint import pprint
 from time import sleep
 from Genes import ConnectionGene, NodeGene
+import pickle
 
 from Neural import Network, Node
 class Organism:
-	mutate_rate = 0.05
+
+	organism_id = 0
+	mutate_connection_rate = 0.3
+	mutate_node_rate = 0.03
 	def __init__(self, levels):
 		self.node_genes       = {}
 		self.connection_genes = {}
 		self.levels  = levels
 		self.fitness = None
 		self.fitness_adj = None
-		self.species = False
+		self.max_fitness = 0
+		self.species = None
+
+		self.id = Organism.organism_id
+		Organism.organism_id += 1
 
 	def __str__(self):
 		nodes = [str(node.innovation) + ": %s" % node.level for node in self.node_genes.values()]
@@ -22,6 +30,19 @@ class Organism:
 		connections = ["%s: %s to %s: %s, %s" % (connection.innovation, connection.out, connection.into, connection.weight, connection.disabled) for connection in self.connection_genes.values()]
 		connections = "\n".join(connections)
 		return "Nodes:\n" + nodes + "\nConnections:\n" + connections
+
+	def save(self, file):
+		with open(file,"a+") as f:
+			pickle.dump(self, f)
+
+	@classmethod
+	def load(self, file):
+		with open(file,"r") as f:
+			return pickle.load(f)
+
+	def setFitness(self, value):
+		self.fitness = value
+		if value > self.max_fitness: self.max_fitness = value
 
 	def addNode(self, node):
 		self.node_genes[node.innovation] = deepcopy(node)
@@ -36,7 +57,7 @@ class Organism:
 		c1 = 1.0
 		c3 = 0.4
 		N  = float(max([self.totalGenes(), org2.totalGenes()]))
-		if N < 100: N = 1.0
+		N = 1
 
 		shared_connections = set(self.connection_genes.keys()).intersection(set(org2.connection_genes.keys()))
 		W = 0.0
@@ -128,6 +149,7 @@ class Organism:
 
 		# Loop through connection genes and populate node inputs
 		for connection_gene in self.connection_genes.values():
+			if connection_gene.disabled: continue
 			network.nodes[connection_gene.into].inputs.append({
 				'node': network.nodes[connection_gene.out],
 				'weight': connection_gene.weight
@@ -136,14 +158,14 @@ class Organism:
 		return network
 
 	def mutate(self):
-		if randint(0,100)+1 < Organism.mutate_rate*100.0:
+		if randint(0,100)+1 < Organism.mutate_connection_rate*100.0:
 			self.__mutateAddConnection()
 
-		if randint(0,100)+1 < Organism.mutate_rate*100.0:
+		if randint(0,100)+1 < Organism.mutate_node_rate*100.0 and len(self.connection_genes) > 0:
 			self.__mutateAddNode()
 
-		if randint(0,100)+1 < Organism.mutate_rate*100.0:
-			self.__mutateDisableConnection()
+		#if randint(0,100)+1 < Organism.mutate_rate*100.0:
+		#	self.__mutateDisableConnection()
 
 		if randint(0,100)+1 < 0.8*100.0:
 			self.__mutateConnectionWeight()
@@ -220,16 +242,24 @@ class Organism:
 
 	def __mutateConnectionWeight(self):
 		# Loop through all connections and chance change weight
-		connection = choice(self.connection_genes.values())
-		connection.weight = float(randint(-10,10))/10.0
+		for connection in self.connection_genes.values():
+			if random() < 0.1:
+				connection.weight = float(randint(-40,40))/10.0
+			else:
+				connection.weight += choice([-1,1]) * 0.1
 
 class Species:
+
+	species_id = 0
 	crossover_chance = 0.75
 	def __init__(self):
 		self.members     = []
 		self.max_fitness = 0
 		self.avg_fitness = 0
-		self.stalesness  = 0
+		self.staleness  = 0
+
+		self.id = Species.species_id
+		Species.species_id += 1
 
 	def getTopFitness(self):
 		self.members.sort(key=lambda x: x.fitness*-1)
@@ -242,7 +272,12 @@ class Species:
 
 	def addOrganism(self, organism):
 		self.members.append(organism)
-		organism.species = True
+		organism.species = self.id
+
+	def cull(self, n):
+		self.rankMembers()
+		top = self.members[:n]
+		self.members = top
 
 	def cullOne(self):
 		top = self.members[0]
@@ -253,9 +288,15 @@ class Species:
 		if len(self.members)/2 < 1: return
 		self.members = self.members[:len(self.members)/2]
 
+	def updateMaxFitness(self):
+		self.staleness += 1
+		for organism in self.members:
+			if organism.max_fitness >= self.max_fitness:
+				self.max_fitness = organism.max_fitness
+				self.staleness = 0
+
 	def rankMembers(self):
-		self.members.sort(key=lambda x: x.fitness*-1)
-		self.max_fitness = self.members[0].fitness
+		self.members.sort(key=lambda x: x.max_fitness*-1)
 		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.members, 0.0) / len(self.members)
 
 	def organismBelongs(self, organism):
@@ -272,7 +313,7 @@ class Species:
 			# Pick random parents from species
 			temp_members = deepcopy(self.members)
 			parent1 = choice(temp_members)
-			temp_members.remove(parent1)
+			#temp_members.remove(parent1)
 			parent2 = choice(temp_members)
 			child = parent1.mateWith(parent2)
 			child.mutate()
@@ -287,7 +328,7 @@ class Species:
 		return child
 
 class Neat:
-	def __init__(self, n_inputs, n_outputs):
+	def __init__(self):
 		self.generation  = 0
 		self.history     = []
 		self.species     = []
@@ -297,13 +338,14 @@ class Neat:
 		self.avg_fitness = 0
 
 		self.options              = {}
-		self.options['pop_size']  = 50
-		self.options['n_survive'] = 5
+		self.options['pop_size']  = 100
 		self.options['levels']    = 10
+		self.options['members_passed']    = 4
+		self.options['species_passed']    = 7
 
-		Species.crossover_chance  = 0.75
-		Organism.mutate_rate      = 0.15
+		Species.crossover_chance  = 0.01
 
+	def init(self, n_inputs, n_outputs):
 		# Create initial population
 		base = Organism(self.options['levels'])
 
@@ -316,7 +358,8 @@ class Neat:
 		# Create bias node
 		node = NodeGene()
 		node.level = 1
-		node.value = 1.0
+		node.value = 2.0
+		base.addNode(node)
 
 		# Create output NodeGenes
 		for i in range(0, n_outputs):
@@ -324,19 +367,23 @@ class Neat:
 			node.level = self.options['levels']
 			base.addNode(node)
 
+			
 			# Create connections between all inputs and outputs
 			for j in range(0, n_inputs):
 				connection_gene = ConnectionGene()
 				connection_gene.out  = j + 1
 				connection_gene.into = node.innovation
-				connection_gene.weight = 1.0
+				connection_gene.weight = 0.0
 				base.addConnection(connection_gene)
+			
 
 
 		# Mutate base to create population
 		for i in range(0, self.options['pop_size']):
 			new_organism = deepcopy(base)
 			new_organism.mutate()
+			new_organism.id = Organism.organism_id
+			Organism.organism_id += 1
 			#base = new_organism
 			self.addOrganism(new_organism)
 
@@ -347,12 +394,12 @@ class Neat:
 		# Loop through all species and compare
 		for species in self.species:
 			# Continue if organism already belongs to a species
-			if organism.species: continue
+			if organism.species is not None: continue
 			if species.organismBelongs(organism):
 				species.addOrganism(organism)
 
 		# If organism does not belong to a species, create new
-		if organism.species == False:
+		if organism.species is None:
 			species = Species()
 			species.addOrganism(organism)
 			self.addSpecies(species)
@@ -393,69 +440,79 @@ class Neat:
 				population.append(member)
 		return population
 
-	def rankGlobally(self):
-		# Sum members of species
-		population = self.getPopulation()
-		# Get avg_fitness
-		if len(population) == 0:
-			self.avg_fitness = 0
-			self.max_fitness = 0
-			return
-		self.avg_fitness = reduce(lambda x, y: x + y.fitness, population, 0.0) / len(population)
-		# Rank members
-		population.sort(key = lambda x: -1*x.fitness_adj)
-		self.global_rank = population
-		# Get max fitness
-		self.max_fitness = population[0].fitness
-
 	def epoch(self):
 		
-
+		# Make sure each organism has been assigned a fitness
 		for species in self.species:
 			for organism in species.members:
 				if organism.fitness is None: raise Exception("Cannot epoch when some fitness values have not been assigned!")
-				# Update max fitness
+				
+				# Update max fitness for neat
 				if organism.fitness > self.max_fitness: self.max_fitness = organism.fitness
 
-			species.assignAdjFitness()
+			# Update each species fitness
+			species.updateMaxFitness()
+
+			#species.assignAdjFitness()
 
 
 
-		self.species.sort(key=lambda x: x.getTopFitness()*-1)
-		passed = [species for species in self.species[:self.options['n_survive']]]
+		# Sort species by their max_fitness **used to be by best current organism
+		self.species.sort(key=lambda x: x.max_fitness*-1/log(x.staleness+15,15)) # used to be x.getBestOrganism()*-1
 
-		self.rankGlobally()
-		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.global_rank, 0.0)/len(self.global_rank)
+		# Created passed, a list of the top species
+		passed = deepcopy(self.species[:self.options['species_passed']])
+		for species in passed:
+			species.cull(self.options['members_passed'])
+
+		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.getPopulation(), 0.0)/len(self.getPopulation())
 		self.max_fitness = passed[0].members[0].fitness
 
-		print "===== Summary of Generation #%s =====" % self.generation
-		print "Number of Species: %s" % len(self.species)
+		print "\n===== Summary of Generation #%s =====" % self.generation
+		print "Number of Species: %s" % len(self.species)	
+		print "Overall Max Fitness: %s" % passed[0].max_fitness
 		print "Max Fitness: %s" % self.max_fitness
 		print "Avg Fitness: %s" % self.avg_fitness
-		print "Passing following organisms:"
-		print [species.members[0].fitness for species in passed]
-		print "======================================"
-
-
-		
-
+		print "Passing Following Species:"
 		for species in passed:
-			species.cullOne()
+			print "Species %s: Fitness: %s, Staleness: %s" % (species.id, species.max_fitness, species.staleness)
+			for member in species.members:
+				print "     Member %s: Max Fitness: %s, Current Fitness: %s" % (member.id, member.max_fitness, member.fitness)
+		print "======================================\n\n"
+
+		'''
+		# Clear fitness values of passed
+		for species in passed:
+			for organism in species.members:
+				organism.fitness = None
+		'''
+
+		if self.generation % 25 == 0:
+			passed[0].members[0].save("generation_%s.org" % self.generation)
+
+		self.generation += 1
+
 
 		children = []
-		while len(passed) + len(children) < self.options['pop_size']:
+		while len(passed)*self.options['members_passed'] + len(children) < self.options['pop_size']:
 			# Same species breed or interspecies breed?
 			child = None
-			if random() < 0.1:
-				temp_passed = deepcopy([species.members[0] for species in passed])
-				parent1 = choice(temp_passed)
-				temp_passed.remove(parent1)
-				parent2 = choice(temp_passed)
-				child = parent1.mateWith(parent2)
-				child.mutate()
-			else:
-				species = choice(passed)
+			if len(passed) == 1:
+				species = passed[0]
 				child = species.breedChild()
+			else:
+				if random() < 0.1:
+					temp_passed = deepcopy([species.members[0] for species in passed])
+					parent1 = choice(temp_passed)
+					temp_passed.remove(parent1)
+					parent2 = choice(temp_passed)
+					print "%s, %s" % (parent1.species, parent2.species)
+					child = parent1.mateWith(parent2)
+					child.mutate()
+				else:
+					species = choice(passed)
+					child = species.breedChild()
+			
 			children.append(child)
 
 		
@@ -476,7 +533,6 @@ class Neat:
 				if organism.fitness is None: raise Exception("Cannot epoch when some fitness values have not been assigned!")
 				# Update max fitness
 				if organism.fitness > self.max_fitness: self.max_fitness = organism.fitness
-			species.cullHalf()
 
 		if len(self.species) > 1:
 			self.removeStaleSpecies()
@@ -487,7 +543,7 @@ class Neat:
 		children = []
 		passed = filter(lambda x: x, [len(species.members) > 0 for species in self.species])
 		if len(passed) > self.options['pop_size']*0.1:
-			self.species.sort(key=lambda x: x.max_fitness)
+			self.species.sort(key=lambda x: x.max_fitness*-1)
 			self.species = self.species[:int(self.options['pop_size']*0.1)]
 		print "passed: %s" % len(passed)
 		# Generate children from species

@@ -5,7 +5,8 @@ from time import sleep
 neat = Neat(2, 1)
 
 for i in range(0, 200):
-	print i
+
+	if i % 5 == 0: sleep(0.5)
 
 	for organism in neat.getPopulation():
 		network = organism.createNetwork()
@@ -41,11 +42,9 @@ for i in range(0, 200):
 			organism.fitness = 100000
 			continue
 
-		organism.fitness =  (4 - error)**2
+		organism.setFitness((4 - error)**2)
 
 		#print len(organism.node_genes) + len(organism.connection_genes)
-
-	print [(org.fitness, org.totalGenes()) for org in neat.global_rank]
 	neat.epoch()
 
 

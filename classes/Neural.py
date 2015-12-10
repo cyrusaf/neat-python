@@ -26,7 +26,7 @@ class Node:
 		return self.value
 
 	def activationFunc(self, x):
-		return 1.0 / (1.0 + exp(-4.9 * x)) # sigmoid
+		return 2.0 / (1.0 + exp(-4.9 * x)) - 1 # sigmoid
 
 class Network:
 	def __init__(self, levels):
@@ -55,9 +55,9 @@ class Network:
 
 		network = deepcopy(self)
 
-		if len(input_nodes) != len(inputs): raise Exception("Number of inputs must match number of input nodes!")
+		if len(input_nodes) - 1 != len(inputs): raise Exception("Number of inputs must match number of input nodes!")
 
-		for i, node_id in enumerate(input_nodes):
+		for i, node_id in enumerate(input_nodes[:(len(input_nodes)-1)]):
 			network.nodes[node_id].value = inputs[i]
 
 		for node_id in output_nodes:
