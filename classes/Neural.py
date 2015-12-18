@@ -26,6 +26,8 @@ class Node:
 		return self.value
 
 	def activationFunc(self, x):
+		if x > 3: x = 3
+		if x < -3: x = -3
 		return 2.0 / (1.0 + exp(-4.9 * x)) - 1 # sigmoid
 
 class Network:

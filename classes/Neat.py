@@ -12,6 +12,7 @@ class Organism:
 	organism_id = 0
 	mutate_connection_rate = 0.3
 	mutate_node_rate = 0.03
+	n_threshold = 35
 	def __init__(self, levels):
 		self.node_genes       = {}
 		self.connection_genes = {}
@@ -32,7 +33,7 @@ class Organism:
 		return "Nodes:\n" + nodes + "\nConnections:\n" + connections
 
 	def save(self, file):
-		with open(file,"a+") as f:
+		with open(file,"w+") as f:
 			pickle.dump(self, f)
 
 	@classmethod
@@ -57,13 +58,14 @@ class Organism:
 		c1 = 1.0
 		c3 = 0.4
 		N  = float(max([self.totalGenes(), org2.totalGenes()]))
-		N = 1
+		#if N < Organism.n_threshold: N = 1
+		N = 1.0
 
 		shared_connections = set(self.connection_genes.keys()).intersection(set(org2.connection_genes.keys()))
 		W = 0.0
 		for conn_id in shared_connections:
 			diff = fabs(self.connection_genes[conn_id].weight - org2.connection_genes[conn_id].weight)
-			W += diff
+			W += fabs(diff)
 		W = W / len(shared_connections)
 
 
@@ -255,6 +257,7 @@ class Species:
 	def __init__(self):
 		self.members     = []
 		self.max_fitness = 0
+		self.fitness     = 0
 		self.avg_fitness = 0
 		self.staleness  = 0
 
@@ -290,13 +293,17 @@ class Species:
 
 	def updateMaxFitness(self):
 		self.staleness += 1
+		self.fitness = 0
 		for organism in self.members:
-			if organism.max_fitness >= self.max_fitness:
+			if organism.fitness > self.fitness:
+				self.fitness = organism.fitness
+
+			if organism.max_fitness > self.max_fitness:
 				self.max_fitness = organism.max_fitness
 				self.staleness = 0
 
 	def rankMembers(self):
-		self.members.sort(key=lambda x: x.max_fitness*-1)
+		self.members.sort(key=lambda x: x.fitness*-1)
 		self.avg_fitness = reduce(lambda x, y: x + y.fitness, self.members, 0.0) / len(self.members)
 
 	def organismBelongs(self, organism):
@@ -346,6 +353,9 @@ class Neat:
 		Species.crossover_chance  = 0.01
 
 	def init(self, n_inputs, n_outputs):
+		Organism.n_threshold = (n_inputs+1)*n_outputs + n_inputs + n_outputs + 1 + 4
+		print "n_threshold: %s" % Organism.n_threshold
+
 		# Create initial population
 		base = Organism(self.options['levels'])
 
@@ -369,7 +379,7 @@ class Neat:
 
 			
 			# Create connections between all inputs and outputs
-			for j in range(0, n_inputs):
+			for j in range(0, n_inputs+1):
 				connection_gene = ConnectionGene()
 				connection_gene.out  = j + 1
 				connection_gene.into = node.innovation
@@ -458,7 +468,7 @@ class Neat:
 
 
 		# Sort species by their max_fitness **used to be by best current organism
-		self.species.sort(key=lambda x: x.max_fitness*-1/log(x.staleness+15,15)) # used to be x.getBestOrganism()*-1
+		self.species.sort(key=lambda x: x.fitness*-1) # used to be x.getBestOrganism()*-1
 
 		# Created passed, a list of the top species
 		passed = deepcopy(self.species[:self.options['species_passed']])
@@ -475,9 +485,10 @@ class Neat:
 		print "Avg Fitness: %s" % self.avg_fitness
 		print "Passing Following Species:"
 		for species in passed:
-			print "Species %s: Fitness: %s, Staleness: %s" % (species.id, species.max_fitness, species.staleness)
+			print "Species %s: Max Species: %s, Fitness: %s, Staleness: %s" % (species.id, species.max_fitness, species.fitness, species.staleness)
 			for member in species.members:
-				print "     Member %s: Max Fitness: %s, Current Fitness: %s" % (member.id, member.max_fitness, member.fitness)
+				print "     Member %s: Max Fitness: %s, Current Fitness: %s, Complexity: %s" % (member.id, member.max_fitness, member.fitness, member.totalGenes())
+			print ""
 		print "======================================\n\n"
 
 		'''
@@ -487,7 +498,7 @@ class Neat:
 				organism.fitness = None
 		'''
 
-		if self.generation % 25 == 0:
+		if self.generation % 10 == 0:
 			passed[0].members[0].save("generation_%s.org" % self.generation)
 
 		self.generation += 1
@@ -506,7 +517,6 @@ class Neat:
 					parent1 = choice(temp_passed)
 					temp_passed.remove(parent1)
 					parent2 = choice(temp_passed)
-					print "%s, %s" % (parent1.species, parent2.species)
 					child = parent1.mateWith(parent2)
 					child.mutate()
 				else:
@@ -546,6 +556,7 @@ class Neat:
 			self.species.sort(key=lambda x: x.max_fitness*-1)
 			self.species = self.species[:int(self.options['pop_size']*0.1)]
 		print "passed: %s" % len(passed)
+
 		# Generate children from species
 		for species in self.species:
 			#print "Species avg_fitness: %s, Population avg_fitness: %s" % (species.avg_fitness, self.avg_fitness)
